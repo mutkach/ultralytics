@@ -150,7 +150,18 @@ class MTMCBridge:
                 # One-to-one matching using Hungarian algorithm
                 matches, _, _ = linear_assignment(dists, thresh=self.reid_threshold)
                 for idx1, idx2 in matches:
-                    self._unify_ids(tracks1[idx1], tracks2[idx2])
+                    t1, t2 = tracks1[idx1], tracks2[idx2]
+                    dist = dists[idx1, idx2]
+                    # Note: embedding_distance uses smooth_feat for tracks1, curr_feat for tracks2
+                    t1_smooth_norm = np.linalg.norm(t1.smooth_feat) if t1.smooth_feat is not None else 0
+                    t2_curr_norm = np.linalg.norm(t2.curr_feat) if t2.curr_feat is not None else 0
+                    t2_smooth_norm = np.linalg.norm(t2.smooth_feat) if t2.smooth_feat is not None else 0
+                    print(
+                        f"[MTMC] Unifying: {cam1}:T{t1.track_id} <-> {cam2}:T{t2.track_id} | "
+                        f"dist={dist:.4f} (thresh={self.reid_threshold}) | "
+                        f"t1.smooth={t1_smooth_norm:.3f}, t2.curr={t2_curr_norm:.3f}, t2.smooth={t2_smooth_norm:.3f}"
+                    )
+                    self._unify_ids(t1, t2)
 
     def _unify_ids(self, track1: BOTrack, track2: BOTrack) -> None:
         """
