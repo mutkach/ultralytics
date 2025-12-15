@@ -32,6 +32,9 @@ class BOTrack(STrack):
         alpha (float): Smoothing factor for the exponential moving average of features.
         mean (np.ndarray): The mean state of the Kalman filter.
         covariance (np.ndarray): The covariance matrix of the Kalman filter.
+        verification_status (str): MTMC verification status ("pending", "confirmed", or "alarm").
+        face_id (str | None): External face ID when track is verified via face recognition.
+        global_id (int | None): Cross-camera unified ID for MTMC tracking.
 
     Methods:
         update_features: Update features vector and smooth it using exponential moving average.
@@ -73,6 +76,11 @@ class BOTrack(STrack):
             self.update_features(feat)
         self.features = deque([], maxlen=feat_history)
         self.alpha = 0.9
+
+        # MTMC (Multi-Target Multi-Camera) tracking attributes
+        self.verification_status = "pending"  # "pending" | "confirmed" | "alarm"
+        self.face_id = None  # External face ID when verified
+        self.global_id = None  # Cross-camera unified ID
 
     def update_features(self, feat: np.ndarray) -> None:
         """Update the feature vector and apply exponential moving average smoothing."""
