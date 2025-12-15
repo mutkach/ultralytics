@@ -176,7 +176,7 @@ class MTMCBridge:
         """Mark unverified tracks as 'alarm' if they exceed the timeout threshold."""
         for tracker in self.trackers.values():
             for track in tracker.tracked_stracks:
-                if track.verification_status == "awaiting" and track.tracklet_len > self.alarm_timeout:
+                if track.verification_status == "waiting" and track.tracklet_len > self.alarm_timeout:
                     track.verification_status = "alarm"
 
     def verify_track(self, camera_id: str, track_id: int, face_id: str) -> bool:
@@ -253,14 +253,14 @@ class MTMCBridge:
         """
         return [t for t in self._get_all_tracks() if t.verification_status == "alarm"]
 
-    def get_awaiting(self) -> list[BOTrack]:
+    def get_waiting(self) -> list[BOTrack]:
         """
-        Get all tracks in awaiting state.
+        Get all tracks in waiting state.
 
         Returns:
-            list[BOTrack]: List of tracks with verification_status == "awaiting".
+            list[BOTrack]: List of tracks with verification_status == "waiting".
         """
-        return [t for t in self._get_all_tracks() if t.verification_status == "awaiting"]
+        return [t for t in self._get_all_tracks() if t.verification_status == "waiting"]
 
     def get_confirmed(self) -> list[BOTrack]:
         """
