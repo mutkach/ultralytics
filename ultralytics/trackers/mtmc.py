@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .utils.matching import embedding_distance
+from .utils.matching import embedding_distance, linear_assignment
 
 if TYPE_CHECKING:
     from .bot_sort import BOTrack, BOTSORT
@@ -148,9 +148,9 @@ class MTMCBridge:
                 # Compute embedding distance matrix
                 dists = embedding_distance(tracks1, tracks2)
 
-                # Find all matches below threshold
-                matches = np.where(dists < self.reid_threshold)
-                for idx1, idx2 in zip(*matches):
+                # One-to-one matching using Hungarian algorithm
+                matches, _, _ = linear_assignment(dists, thresh=self.reid_threshold)
+                for idx1, idx2 in matches:
                     self._unify_ids(tracks1[idx1], tracks2[idx2])
 
     def _unify_ids(self, track1: BOTrack, track2: BOTrack) -> None:
