@@ -32,7 +32,7 @@ class BOTrack(STrack):
         alpha (float): Smoothing factor for the exponential moving average of features.
         mean (np.ndarray): The mean state of the Kalman filter.
         covariance (np.ndarray): The covariance matrix of the Kalman filter.
-        verification_status (str): MTMC verification status ("pending", "confirmed", or "alarm").
+        verification_status (str): MTMC verification status ("awaiting", "confirmed", or "alarm").
         face_id (str | None): External face ID when track is verified via face recognition.
         global_id (int | None): Cross-camera unified ID for MTMC tracking.
         camera_id (str | None): Camera identifier for MTMC tracking.
@@ -79,7 +79,7 @@ class BOTrack(STrack):
         self.alpha = 0.9
 
         # MTMC (Multi-Target Multi-Camera) tracking attributes
-        self.verification_status = "pending"  # "pending" | "confirmed" | "alarm"
+        self.verification_status = "awaiting"  # "awaiting" | "confirmed" | "alarm"
         self.face_id = None  # External face ID when verified
         self.global_id = None  # Cross-camera unified ID
         self.camera_id = None  # Camera identifier for MTMC tracking
