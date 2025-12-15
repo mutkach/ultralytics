@@ -25,7 +25,9 @@ class MTMCBridge:
 
     Attributes:
         trackers (dict): Mapping of camera_id to tracker instance.
-        reid_threshold (float): Cosine distance threshold for ReID matching (lower = stricter).
+        reid_threshold (float): Cosine distance threshold for cross-camera ReID matching (lower = stricter).
+        same_camera_threshold (float): Cosine distance threshold for same-camera matching (reserved).
+        min_tracklet_len (int): Minimum track length before considering for cross-camera matching.
         alarm_timeout (int): Number of frames before an unverified track triggers an alarm.
 
     Examples:
@@ -41,18 +43,31 @@ class MTMCBridge:
         >>> alarms = bridge.get_alarms()  # Get unverified tracks
     """
 
-    def __init__(self, reid_threshold: float = 0.3, alarm_timeout_frames: int = 600):
+    def __init__(
+        self,
+        reid_threshold: float = 0.3,
+        same_camera_threshold: float = 0.2,
+        min_tracklet_len: int = 5,
+        alarm_timeout_frames: int = 600,
+    ):
         """
         Initialize MTMCBridge for cross-camera track coordination.
 
         Args:
-            reid_threshold (float): Cosine distance threshold for ReID matching.
-                Lower values are stricter (0.3 = 70% similarity required).
+            reid_threshold (float): Cosine distance threshold for cross-camera ReID matching.
+                Lower values are stricter (0.3 = 70% similarity required). Cross-camera matching
+                typically needs looser thresholds due to lighting/angle differences.
+            same_camera_threshold (float): Cosine distance threshold for same-camera matching.
+                Reserved for future use. Stricter than cross-camera (0.2 = 80% similarity).
+            min_tracklet_len (int): Minimum number of frames a track must exist before being
+                considered for cross-camera matching. Allows smooth_feat to stabilize.
             alarm_timeout_frames (int): Number of frames before unverified track triggers alarm.
                 At 30fps, 600 frames = 20 seconds.
         """
         self.trackers: dict[str, BOTSORT] = {}
         self.reid_threshold = reid_threshold
+        self.same_camera_threshold = same_camera_threshold
+        self.min_tracklet_len = min_tracklet_len
         self.alarm_timeout = alarm_timeout_frames
         self._global_id_counter = 0
 
@@ -104,7 +119,7 @@ class MTMCBridge:
         tracks = []
         for cam_id, tracker in self.trackers.items():
             for track in tracker.tracked_stracks:
-                track._camera_id = cam_id  # Tag track with its camera source
+                track.camera_id = cam_id  # Tag track with its camera source
                 tracks.append(track)
         return tracks
 
@@ -115,9 +130,17 @@ class MTMCBridge:
         # Compare each pair of cameras
         for i, cam1 in enumerate(cam_ids):
             for cam2 in cam_ids[i + 1 :]:
-                # Get tracks with valid embeddings
-                tracks1 = [t for t in self.trackers[cam1].tracked_stracks if t.smooth_feat is not None]
-                tracks2 = [t for t in self.trackers[cam2].tracked_stracks if t.smooth_feat is not None]
+                # Get tracks with valid embeddings and sufficient length for stable matching
+                tracks1 = [
+                    t
+                    for t in self.trackers[cam1].tracked_stracks
+                    if t.smooth_feat is not None and t.tracklet_len >= self.min_tracklet_len
+                ]
+                tracks2 = [
+                    t
+                    for t in self.trackers[cam2].tracked_stracks
+                    if t.smooth_feat is not None and t.tracklet_len >= self.min_tracklet_len
+                ]
 
                 if not tracks1 or not tracks2:
                     continue
@@ -210,14 +233,14 @@ class MTMCBridge:
                 If None, return tracks from all cameras.
 
         Returns:
-            list[BOTrack]: List of tracks (with _camera_id attribute set).
+            list[BOTrack]: List of tracks (with camera_id attribute set).
         """
         if camera_id is not None:
             tracker = self.trackers.get(camera_id)
             if tracker:
                 tracks = list(tracker.tracked_stracks)
                 for track in tracks:
-                    track._camera_id = camera_id
+                    track.camera_id = camera_id
                 return tracks
             return []
         return self._get_all_tracks()
@@ -264,7 +287,7 @@ class MTMCBridge:
         if tracker:
             for track in tracker.tracked_stracks:
                 if track.track_id == track_id:
-                    track._camera_id = camera_id
+                    track.camera_id = camera_id
                     return track
         return None
 
@@ -296,5 +319,7 @@ class MTMCBridge:
             f"MTMCBridge(cameras={list(self.trackers.keys())}, "
             f"tracks={len(self)}, "
             f"reid_threshold={self.reid_threshold}, "
+            f"same_camera_threshold={self.same_camera_threshold}, "
+            f"min_tracklet_len={self.min_tracklet_len}, "
             f"alarm_timeout={self.alarm_timeout})"
         )

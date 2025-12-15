@@ -35,6 +35,7 @@ class BOTrack(STrack):
         verification_status (str): MTMC verification status ("pending", "confirmed", or "alarm").
         face_id (str | None): External face ID when track is verified via face recognition.
         global_id (int | None): Cross-camera unified ID for MTMC tracking.
+        camera_id (str | None): Camera identifier for MTMC tracking.
 
     Methods:
         update_features: Update features vector and smooth it using exponential moving average.
@@ -81,6 +82,7 @@ class BOTrack(STrack):
         self.verification_status = "pending"  # "pending" | "confirmed" | "alarm"
         self.face_id = None  # External face ID when verified
         self.global_id = None  # Cross-camera unified ID
+        self.camera_id = None  # Camera identifier for MTMC tracking
 
     def update_features(self, feat: np.ndarray) -> None:
         """Update the feature vector and apply exponential moving average smoothing."""
