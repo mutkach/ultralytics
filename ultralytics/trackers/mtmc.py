@@ -61,6 +61,7 @@ class MTMCBridge:
     def update(self, frame_num: int = 0) -> None:
         self._match_across_cameras()
         self._match_against_track_gallery(frame_num)
+        self._assign_global_ids()
         self._match_against_identities()
         self._update_track_gallery(frame_num)
         self._check_alarms()
@@ -131,6 +132,16 @@ class MTMCBridge:
                         f"[MTMC] Gallery match: T{track.track_id} -> G{global_id} | "
                         f"dist={distance:.4f} face={face_id or 'none'}"
                     )
+
+    def _assign_global_ids(self) -> None:
+        for tracker in self.trackers.values():
+            for track in tracker.tracked_stracks:
+                if track.global_id is not None:
+                    continue
+                if track.tracklet_len < self.min_tracklet_len:
+                    continue
+                self._global_id_counter += 1
+                track.global_id = self._global_id_counter
 
     def _update_track_gallery(self, frame_num: int) -> None:
         if not self.enable_track_gallery:
