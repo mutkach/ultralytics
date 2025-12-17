@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from .identity_store import IdentityStore, StoredIdentity
 from .utils.matching import embedding_distance, linear_assignment
 
 if TYPE_CHECKING:
@@ -48,6 +49,10 @@ class MTMCBridge:
         same_camera_threshold: float = 0.2,
         min_tracklet_len: int = 5,
         alarm_timeout_frames: int = 600,
+        identity_match_threshold: float = 0.25,
+        enable_identity_matching: bool = True,
+        max_features_per_identity: int = 10,
+        identity_ttl_frames: int = 108000,
     ):
         """
         Initialize MTMCBridge for cross-camera track coordination.
@@ -62,6 +67,11 @@ class MTMCBridge:
                 considered for cross-camera matching. Allows smooth_feat to stabilize.
             alarm_timeout_frames (int): Number of frames before unverified track triggers alarm.
                 At 30fps, 600 frames = 20 seconds.
+            identity_match_threshold (float): Cosine distance threshold for identity store matching.
+                Stricter than cross-camera (0.25 default) for higher confidence auto-confirmation.
+            enable_identity_matching (bool): Enable/disable identity store matching.
+            max_features_per_identity (int): Max features to store per identity (FIFO eviction).
+            identity_ttl_frames (int): Frames before stale identities are removed (~1 hour @ 30fps).
         """
         self.trackers: dict[str, BOTSORT] = {}
         self.reid_threshold = reid_threshold
@@ -69,6 +79,14 @@ class MTMCBridge:
         self.min_tracklet_len = min_tracklet_len
         self.alarm_timeout = alarm_timeout_frames
         self._global_id_counter = 0
+
+        # Identity store for verified identity re-matching
+        self.enable_identity_matching = enable_identity_matching
+        self.identity_store = IdentityStore(
+            max_features_per_identity=max_features_per_identity,
+            match_threshold=identity_match_threshold,
+            feature_ttl_frames=identity_ttl_frames,
+        )
 
     def register(self, camera_id: str, tracker: BOTSORT) -> None:
         """
@@ -95,7 +113,7 @@ class MTMCBridge:
             return True
         return False
 
-    def update(self) -> None:
+    def update(self, frame_num: int = 0) -> None:
         """
         Update cross-camera matching and verification status.
 
@@ -103,10 +121,19 @@ class MTMCBridge:
         with their respective detections. It performs:
         1. Cross-camera track matching using ReID embeddings
         2. Global ID unification for matched tracks
-        3. Alarm status updates for unverified tracks exceeding timeout
+        3. Identity store matching for waiting tracks (auto-confirmation)
+        4. Alarm status updates for unverified tracks exceeding timeout
+
+        Args:
+            frame_num (int): Current frame number for identity store cleanup.
         """
         self._match_across_cameras()
+        self._match_against_identities()
         self._check_alarms()
+
+        # Periodic cleanup of stale identities
+        if frame_num > 0 and frame_num % 1000 == 0:
+            self.identity_store.cleanup(frame_num)
 
     def _get_all_tracks(self) -> list[BOTrack]:
         """
@@ -190,14 +217,38 @@ class MTMCBridge:
                 if track.verification_status == "waiting" and track.tracklet_len > self.alarm_timeout:
                     track.verification_status = "alarm"
 
-    def verify_track(self, camera_id: str, track_id: int, face_id: str) -> bool:
+    def _match_against_identities(self) -> None:
+        """Match waiting tracks against stored verified identities for auto-confirmation."""
+        if not self.enable_identity_matching or len(self.identity_store) == 0:
+            return
+
+        for tracker in self.trackers.values():
+            for track in tracker.tracked_stracks:
+                if track.verification_status != "waiting":
+                    continue
+                if track.smooth_feat is None or track.tracklet_len < self.min_tracklet_len:
+                    continue
+
+                result = self.identity_store.match(track.smooth_feat)
+                if result:
+                    face_id, distance = result
+                    track.verification_status = "confirmed"
+                    track.face_id = face_id
+                    track._reid_confirmed = True
+                    print(
+                        f"[MTMC] ReID auto-confirm: T{track.track_id} -> {face_id} | "
+                        f"dist={distance:.4f} (thresh={self.identity_store.match_threshold})"
+                    )
+
+    def verify_track(self, camera_id: str, track_id: int, face_id: str, frame_num: int = 0) -> bool:
         """
-        Mark a track as verified with a face ID.
+        Mark a track as verified with a face ID and store its features.
 
         Args:
             camera_id (str): Camera where the track is located.
             track_id (int): Local track ID within that camera's tracker.
             face_id (str): External face identity string from face recognition.
+            frame_num (int): Current frame number for feature timestamping.
 
         Returns:
             bool: True if track was found and verified, False otherwise.
@@ -206,14 +257,25 @@ class MTMCBridge:
         if tracker:
             for track in tracker.tracked_stracks:
                 if track.track_id == track_id:
+                    # Conflict resolution: face verification always wins
+                    if track.face_id and track.face_id != face_id:
+                        print(f"[MTMC] Identity conflict: reID said '{track.face_id}', face says '{face_id}'. Face wins.")
+
                     track.verification_status = "confirmed"
                     track.face_id = face_id
+                    track._reid_confirmed = False
+
+                    # Store feature for future matching
+                    if track.smooth_feat is not None:
+                        self.identity_store.register(
+                            face_id, track.smooth_feat, frame_num, track.global_id
+                        )
                     return True
         return False
 
-    def verify_by_global_id(self, global_id: int, face_id: str) -> int:
+    def verify_by_global_id(self, global_id: int, face_id: str, frame_num: int = 0) -> int:
         """
-        Mark all tracks with a given global_id as verified.
+        Mark all tracks with a given global_id as verified and store features.
 
         This is useful when face verification succeeds on one camera and you want
         to propagate the verification to all matched tracks across cameras.
@@ -221,6 +283,7 @@ class MTMCBridge:
         Args:
             global_id (int): Global ID to search for across all cameras.
             face_id (str): External face identity string from face recognition.
+            frame_num (int): Current frame number for feature timestamping.
 
         Returns:
             int: Number of tracks that were verified.
@@ -231,6 +294,13 @@ class MTMCBridge:
                 if track.global_id == global_id:
                     track.verification_status = "confirmed"
                     track.face_id = face_id
+                    track._reid_confirmed = False
+
+                    # Store feature for future matching
+                    if track.smooth_feat is not None:
+                        self.identity_store.register(
+                            face_id, track.smooth_feat, frame_num, track.global_id
+                        )
                     count += 1
         return count
 
@@ -313,11 +383,20 @@ class MTMCBridge:
         """
         return [t for t in self._get_all_tracks() if t.global_id == global_id]
 
+    def get_known_identities(self) -> list[str]:
+        """Return list of all known face_ids in identity store."""
+        return self.identity_store.get_all_identities()
+
+    def get_identity_info(self, face_id: str) -> Optional[StoredIdentity]:
+        """Get stored identity details by face_id."""
+        return self.identity_store.get_identity(face_id)
+
     def reset(self) -> None:
-        """Reset all trackers and clear the global ID counter."""
+        """Reset all trackers, global ID counter, and identity store."""
         for tracker in self.trackers.values():
             tracker.reset()
         self._global_id_counter = 0
+        self.identity_store.clear()
 
     def __len__(self) -> int:
         """Return total number of active tracks across all cameras."""
@@ -328,8 +407,8 @@ class MTMCBridge:
         return (
             f"MTMCBridge(cameras={list(self.trackers.keys())}, "
             f"tracks={len(self)}, "
+            f"identities={len(self.identity_store)}, "
             f"reid_threshold={self.reid_threshold}, "
-            f"same_camera_threshold={self.same_camera_threshold}, "
-            f"min_tracklet_len={self.min_tracklet_len}, "
+            f"identity_matching={self.enable_identity_matching}, "
             f"alarm_timeout={self.alarm_timeout})"
         )
