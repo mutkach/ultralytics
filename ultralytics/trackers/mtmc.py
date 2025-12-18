@@ -15,25 +15,50 @@ if TYPE_CHECKING:
     from .bot_sort import BOTrack, BOTSORT
 
 
-def check_crop_contrast(crop: np.ndarray, min_std: float = 25.0) -> bool:
-    """Check if crop has sufficient contrast for ReID.
+def check_crop_quality(crop: np.ndarray,
+                       min_brightness: float = 40.0,
+                       min_saturation: float = 20.0,
+                       center_ratio: float = 0.5) -> bool:
+    """Check if crop has sufficient lighting quality for ReID.
+
+    Focuses on center region to avoid being fooled by bright backgrounds
+    when the person is poorly lit.
 
     Args:
-        crop: RGB or BGR image array
-        min_std: Minimum standard deviation of grayscale values (0-255 scale)
+        crop: RGB image array
+        min_brightness: Minimum mean brightness of center region (0-255)
+        min_saturation: Minimum mean saturation of center region (0-255)
+        center_ratio: Ratio of crop to use for center region (0.5 = middle 50%)
 
     Returns:
-        True if crop has sufficient contrast
+        True if crop has sufficient quality for ReID
     """
     if crop is None or crop.size == 0:
         return False
-    # Convert to grayscale
-    if len(crop.shape) == 3:
-        gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = crop
-    std = np.std(gray)
-    return std >= min_std
+
+    h, w = crop.shape[:2]
+    if h < 4 or w < 4:
+        return False
+
+    # Extract center region (where the body should be)
+    margin_x = int(w * (1 - center_ratio) / 2)
+    margin_y = int(h * (1 - center_ratio) / 2)
+    center = crop[margin_y:h-margin_y, margin_x:w-margin_x]
+
+    if center.size == 0:
+        return False
+
+    # Check brightness of center region
+    gray = cv2.cvtColor(center, cv2.COLOR_RGB2GRAY)
+    if np.mean(gray) < min_brightness:
+        return False
+
+    # Check color saturation of center (dark areas are desaturated)
+    hsv = cv2.cvtColor(center, cv2.COLOR_RGB2HSV)
+    if np.mean(hsv[:, :, 1]) < min_saturation:
+        return False
+
+    return True
 
 
 class MTMCBridge:
@@ -50,7 +75,9 @@ class MTMCBridge:
         enable_track_gallery: bool = True,
         debug: bool = False,
         crop_store=None,
-        min_crop_contrast: float = 25.0,
+        min_brightness: float = 40.0,
+        min_saturation: float = 20.0,
+        quality_center_ratio: float = 0.5,
     ):
         self.trackers: dict[str, BOTSORT] = {}
         self.reid_threshold = reid_threshold
@@ -59,7 +86,9 @@ class MTMCBridge:
         self.alarm_timeout = alarm_timeout_frames
         self._global_id_counter = 0
         self.crop_store = crop_store
-        self.min_crop_contrast = min_crop_contrast
+        self.min_brightness = min_brightness
+        self.min_saturation = min_saturation
+        self.quality_center_ratio = quality_center_ratio
 
         self.enable_identity_matching = enable_identity_matching
         self.identity_store = IdentityStore(
@@ -197,9 +226,11 @@ class MTMCBridge:
                         if x2 > x1 and y2 > y1:
                             crop = frame[y1:y2, x1:x2]
 
-                # Skip low-contrast crops
-                if crop is not None and self.min_crop_contrast > 0:
-                    if not check_crop_contrast(crop, self.min_crop_contrast):
+                # Skip low-quality crops (dark, desaturated)
+                if crop is not None and self.min_brightness > 0:
+                    if not check_crop_quality(crop, self.min_brightness,
+                                              self.min_saturation,
+                                              self.quality_center_ratio):
                         continue
 
                 added = self.track_gallery.register(
