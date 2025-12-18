@@ -18,7 +18,6 @@ class MTMCBridge:
     def __init__(
         self,
         reid_threshold: float = 0.3,
-        same_camera_threshold: float = 0.2,
         min_tracklet_len: int = 5,
         alarm_timeout_frames: int = 600,
         identity_match_threshold: float = 0.25,
@@ -27,11 +26,12 @@ class MTMCBridge:
         identity_ttl_frames: int = 108000,
         track_gallery_threshold: float = 0.15,
         enable_track_gallery: bool = True,
+        debug: bool = False,
     ):
         self.trackers: dict[str, BOTSORT] = {}
         self.reid_threshold = reid_threshold
-        self.same_camera_threshold = same_camera_threshold
         self.min_tracklet_len = min_tracklet_len
+        self.debug = debug
         self.alarm_timeout = alarm_timeout_frames
         self._global_id_counter = 0
 
@@ -103,11 +103,12 @@ class MTMCBridge:
                 for idx1, idx2 in matches:
                     t1, t2 = tracks1[idx1], tracks2[idx2]
                     dist = dists[idx1, idx2]
-                    print(
-                        f"[MTMC] Cross-cam match: {cam1}:T{t1.track_id} <-> {cam2}:T{t2.track_id} | "
-                        f"dist={dist:.4f} (thresh={self.reid_threshold})"
-                    )
                     self._unify_tracks(t1, t2)
+                    if self.debug:
+                        print(
+                            f"[MTMC] Cross-cam: {cam1}:T{t1.track_id} <-> {cam2}:T{t2.track_id} | "
+                            f"dist={dist:.4f} (thresh={self.reid_threshold}) -> G:{t1.global_id}"
+                        )
 
     def _match_against_track_gallery(self, frame_num: int) -> None:
         if not self.enable_track_gallery or len(self.track_gallery) == 0:
@@ -128,13 +129,15 @@ class MTMCBridge:
                         track.verification_status = "confirmed"
                         track.face_id = face_id
                         track._reid_confirmed = True
-                    print(
-                        f"[MTMC] Gallery match: T{track.track_id} -> G{global_id} | "
-                        f"dist={distance:.4f} face={face_id or 'none'}"
-                    )
+                    if self.debug:
+                        print(
+                            f"[MTMC] Gallery: T{track.track_id} -> G:{global_id} | "
+                            f"dist={distance:.4f} (thresh={self.track_gallery.match_threshold}) "
+                            f"face={face_id or 'none'}"
+                        )
 
     def _assign_global_ids(self) -> None:
-        for tracker in self.trackers.values():
+        for cam_id, tracker in self.trackers.items():
             for track in tracker.tracked_stracks:
                 if track.global_id is not None:
                     continue
@@ -142,6 +145,8 @@ class MTMCBridge:
                     continue
                 self._global_id_counter += 1
                 track.global_id = self._global_id_counter
+                if self.debug:
+                    print(f"[MTMC] New ID: {cam_id}:T{track.track_id} -> G:{track.global_id} (no match found)")
 
     def _update_track_gallery(self, frame_num: int) -> None:
         if not self.enable_track_gallery:
@@ -201,10 +206,15 @@ class MTMCBridge:
             track1.face_id = track2.face_id
 
     def _check_alarms(self) -> None:
-        for tracker in self.trackers.values():
+        for cam_id, tracker in self.trackers.items():
             for track in tracker.tracked_stracks:
                 if track.verification_status == "waiting" and track.tracklet_len > self.alarm_timeout:
                     track.verification_status = "alarm"
+                    if self.debug:
+                        print(
+                            f"[MTMC] Alarm: {cam_id}:T{track.track_id} G:{track.global_id} | "
+                            f"frames={track.tracklet_len} (timeout={self.alarm_timeout})"
+                        )
 
     def _match_against_identities(self) -> None:
         if not self.enable_identity_matching or len(self.identity_store) == 0:
@@ -223,10 +233,11 @@ class MTMCBridge:
                     track.verification_status = "confirmed"
                     track.face_id = face_id
                     track._reid_confirmed = True
-                    print(
-                        f"[MTMC] Identity match: T{track.track_id} -> {face_id} | "
-                        f"dist={distance:.4f} (thresh={self.identity_store.match_threshold})"
-                    )
+                    if self.debug:
+                        print(
+                            f"[MTMC] Identity: T{track.track_id} -> {face_id} | "
+                            f"dist={distance:.4f} (thresh={self.identity_store.match_threshold}) -> CONFIRMED"
+                        )
 
     def verify_track(self, camera_id: str, track_id: int, face_id: str, frame_num: int = 0) -> bool:
         tracker = self.trackers.get(camera_id)
