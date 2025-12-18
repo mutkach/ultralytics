@@ -218,9 +218,9 @@ class MTMCBridge:
                 if frame_num - last_attempt < self.face_detection_interval:
                     continue
 
-                # Skip if already has global_id and confirmed face
+                # Skip if already has global_id and face_vector (already matched)
+                # But still try to detect faces for tracks without global_id
                 if track.global_id is not None and track.face_vector is not None:
-                    # Still update last_seen_frame for gallery
                     continue
 
                 # Extract crop
@@ -232,6 +232,8 @@ class MTMCBridge:
                 # Check minimum size
                 crop_w, crop_h = x2 - x1, y2 - y1
                 if crop_w < self.min_crop_size[0] or crop_h < self.min_crop_size[1]:
+                    if self.debug:
+                        print(f"[MTMC] Crop too small: {cam_id}:T{track.track_id} {crop_w}x{crop_h} < {self.min_crop_size}")
                     continue
 
                 crop = frame[y1:y2, x1:x2]
@@ -246,6 +248,8 @@ class MTMCBridge:
                     continue
 
                 if len(faces) == 0:
+                    if self.debug:
+                        print(f"[MTMC] No face found: {cam_id}:T{track.track_id} (crop {crop_w}x{crop_h})")
                     continue
 
                 # Take best face by detection score
@@ -256,6 +260,17 @@ class MTMCBridge:
                 # Store face vector on track
                 track.face_vector = best_face.embedding
                 track.face_detection_frame = frame_num
+
+                # Save crop for debugging
+                if self.crop_store is not None:
+                    self.crop_store.save(
+                        crop,
+                        global_id=track.global_id,
+                        frame_num=frame_num,
+                        camera_id=cam_id,
+                        track_id=track.track_id,
+                        face_id=track.face_id,
+                    )
 
                 if self.debug:
                     print(
@@ -344,6 +359,9 @@ class MTMCBridge:
                     if self.debug:
                         print(f"[MTMC] Database verification error for {cam_id}:T{track.track_id}: {e}")
                     continue
+
+                if self.debug and face_id == "Not found":
+                    print(f"[MTMC] Database no match: {cam_id}:T{track.track_id} G:{track.global_id}")
 
                 if face_id and face_id != "Not found":
                     track.verification_status = "confirmed"
