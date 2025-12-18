@@ -36,6 +36,8 @@ class BOTrack(STrack):
         face_id (str | None): External face ID when track is verified via face recognition.
         global_id (int | None): Cross-camera unified ID for MTMC tracking.
         camera_id (str | None): Camera identifier for MTMC tracking.
+        face_vector (np.ndarray | None): 512-dim InsightFace embedding for face-based matching.
+        face_detection_frame (int | None): Frame number when face was last detected.
 
     Methods:
         update_features: Update features vector and smooth it using exponential moving average.
@@ -83,6 +85,8 @@ class BOTrack(STrack):
         self.face_id = None  # External face ID when verified
         self.global_id = None  # Cross-camera unified ID
         self.camera_id = None  # Camera identifier for MTMC tracking
+        self.face_vector = None  # 512-dim InsightFace embedding for face-based matching
+        self.face_detection_frame = None  # Frame number when face was last detected
 
     def update_features(self, feat: np.ndarray) -> None:
         """Update the feature vector and apply exponential moving average smoothing."""
