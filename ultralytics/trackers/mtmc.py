@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+import cv2
 import numpy as np
 from scipy.spatial.distance import cdist
 
@@ -12,6 +13,27 @@ from .utils.matching import linear_assignment
 
 if TYPE_CHECKING:
     from .bot_sort import BOTrack, BOTSORT
+
+
+def check_crop_contrast(crop: np.ndarray, min_std: float = 25.0) -> bool:
+    """Check if crop has sufficient contrast for ReID.
+
+    Args:
+        crop: RGB or BGR image array
+        min_std: Minimum standard deviation of grayscale values (0-255 scale)
+
+    Returns:
+        True if crop has sufficient contrast
+    """
+    if crop is None or crop.size == 0:
+        return False
+    # Convert to grayscale
+    if len(crop.shape) == 3:
+        gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = crop
+    std = np.std(gray)
+    return std >= min_std
 
 
 class MTMCBridge:
@@ -28,6 +50,7 @@ class MTMCBridge:
         enable_track_gallery: bool = True,
         debug: bool = False,
         crop_store=None,
+        min_crop_contrast: float = 25.0,
     ):
         self.trackers: dict[str, BOTSORT] = {}
         self.reid_threshold = reid_threshold
@@ -36,6 +59,7 @@ class MTMCBridge:
         self.alarm_timeout = alarm_timeout_frames
         self._global_id_counter = 0
         self.crop_store = crop_store
+        self.min_crop_contrast = min_crop_contrast
 
         self.enable_identity_matching = enable_identity_matching
         self.identity_store = IdentityStore(
@@ -161,15 +185,9 @@ class MTMCBridge:
                 if track.smooth_feat is None:
                     continue
 
-                added = self.track_gallery.register(
-                    track.global_id,
-                    track.smooth_feat,
-                    frame_num,
-                    track.face_id,
-                )
-
-                # Save crop when feature is added to gallery
-                if added and self.crop_store is not None and frames is not None:
+                # Extract crop for contrast check (if frames provided)
+                crop = None
+                if frames is not None:
                     frame = frames.get(cam_id)
                     if frame is not None:
                         x1, y1, x2, y2 = map(int, track.xyxy)
@@ -178,14 +196,29 @@ class MTMCBridge:
                         x2, y2 = min(w, x2), min(h, y2)
                         if x2 > x1 and y2 > y1:
                             crop = frame[y1:y2, x1:x2]
-                            self.crop_store.save(
-                                crop,
-                                global_id=track.global_id,
-                                frame_num=frame_num,
-                                camera_id=cam_id,
-                                track_id=track.track_id,
-                                face_id=track.face_id,
-                            )
+
+                # Skip low-contrast crops
+                if crop is not None and self.min_crop_contrast > 0:
+                    if not check_crop_contrast(crop, self.min_crop_contrast):
+                        continue
+
+                added = self.track_gallery.register(
+                    track.global_id,
+                    track.smooth_feat,
+                    frame_num,
+                    track.face_id,
+                )
+
+                # Save crop when feature is added to gallery
+                if added and self.crop_store is not None and crop is not None:
+                    self.crop_store.save(
+                        crop,
+                        global_id=track.global_id,
+                        frame_num=frame_num,
+                        camera_id=cam_id,
+                        track_id=track.track_id,
+                        face_id=track.face_id,
+                    )
 
     def _unify_tracks(self, track1: BOTrack, track2: BOTrack) -> None:
         old_gid1, old_gid2 = track1.global_id, track2.global_id
