@@ -27,6 +27,7 @@ class MTMCBridge:
         track_gallery_threshold: float = 0.15,
         enable_track_gallery: bool = True,
         debug: bool = False,
+        crop_store=None,
     ):
         self.trackers: dict[str, BOTSORT] = {}
         self.reid_threshold = reid_threshold
@@ -34,6 +35,7 @@ class MTMCBridge:
         self.debug = debug
         self.alarm_timeout = alarm_timeout_frames
         self._global_id_counter = 0
+        self.crop_store = crop_store
 
         self.enable_identity_matching = enable_identity_matching
         self.identity_store = IdentityStore(
@@ -58,12 +60,12 @@ class MTMCBridge:
             return True
         return False
 
-    def update(self, frame_num: int = 0) -> None:
+    def update(self, frame_num: int = 0, frames: Optional[dict] = None) -> None:
         self._match_across_cameras()
         self._match_against_track_gallery(frame_num)
         self._assign_global_ids()
         self._match_against_identities()
-        self._update_track_gallery(frame_num)
+        self._update_track_gallery(frame_num, frames)
         self._check_alarms()
 
         if frame_num > 0 and frame_num % 1000 == 0:
@@ -148,23 +150,42 @@ class MTMCBridge:
                 if self.debug:
                     print(f"[MTMC] New ID: {cam_id}:T{track.track_id} -> G:{track.global_id} (no match found)")
 
-    def _update_track_gallery(self, frame_num: int) -> None:
+    def _update_track_gallery(self, frame_num: int, frames: Optional[dict] = None) -> None:
         if not self.enable_track_gallery:
             return
 
-        for tracker in self.trackers.values():
+        for cam_id, tracker in self.trackers.items():
             for track in tracker.tracked_stracks:
                 if track.global_id is None:
                     continue
                 if track.smooth_feat is None:
                     continue
 
-                self.track_gallery.register(
+                added = self.track_gallery.register(
                     track.global_id,
                     track.smooth_feat,
                     frame_num,
                     track.face_id,
                 )
+
+                # Save crop when feature is added to gallery
+                if added and self.crop_store is not None and frames is not None:
+                    frame = frames.get(cam_id)
+                    if frame is not None:
+                        x1, y1, x2, y2 = map(int, track.xyxy)
+                        h, w = frame.shape[:2]
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w, x2), min(h, y2)
+                        if x2 > x1 and y2 > y1:
+                            crop = frame[y1:y2, x1:x2]
+                            self.crop_store.save(
+                                crop,
+                                global_id=track.global_id,
+                                frame_num=frame_num,
+                                camera_id=cam_id,
+                                track_id=track.track_id,
+                                face_id=track.face_id,
+                            )
 
     def _unify_tracks(self, track1: BOTrack, track2: BOTrack) -> None:
         old_gid1, old_gid2 = track1.global_id, track2.global_id
