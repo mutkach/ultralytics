@@ -257,8 +257,8 @@ class MTMCBridge:
                 if best_face.det_score < self.min_face_det_score:
                     continue
 
-                # Store face vector on track
-                track.face_vector = best_face.embedding
+                # Store face vector on track (copy to avoid reference issues)
+                track.face_vector = np.array(best_face.embedding, dtype=np.float32)
                 track.face_detection_frame = frame_num
 
                 # Save crop for debugging
